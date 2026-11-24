@@ -16,17 +16,17 @@
 
 # 📊 GitHub Stats:
 ![](https://github-readme-stats.vercel.app/api?username=makaDv&theme=dark&hide_border=false&include_all_commits=true&count_private=false)<br/>
-![](https://nirzak-streak-stats.vercel.app/?user=makaDv&theme=dark&hide_border=false)<br/>
+![](https://streak-stats.demolab.com/?user=makaDv&theme=dark&hide_border=false)<br/>
 ![](https://github-readme-stats.vercel.app/api/top-langs/?username=makaDv&theme=dark&hide_border=false&include_all_commits=true&count_private=false&layout=compact)
 
 ## 🏆 GitHub Trophies
-![](https://github-profile-trophy.vercel.app/?username=makaDv&theme=monokai&no-frame=false&no-bg=true&margin-w=4)
+![](https://github-profile-trophy.screw-hand.vercel.app/?username=makaDv&theme=monokai&no-frame=false&no-bg=true&margin-w=4)
 
 ### ✍️ Random Dev Quote
 ![](https://quotes-github-readme.vercel.app/api?type=horizontal&theme=tokyonight)
 
-### 🔝 Top Contributed Repo
-![](https://github-contributor-stats.vercel.app/api?username=makaDv&limit=5&theme=discord_old_blurple&combine_all_yearly_contributions=true)
+### 🔝 Top Repos
+[![fullstack-gym-iot-app](https://github-readme-stats.vercel.app/api/pin/?username=makaDv&repo=fullstack-gym-iot-app&theme=dark)](https://github.com/makaDv/fullstack-gym-iot-app) [![MuteBox](https://github-readme-stats.vercel.app/api/pin/?username=makaDv&repo=MuteBox&theme=dark)](https://github.com/makaDv/MuteBox) [![TempCleaner](https://github-readme-stats.vercel.app/api/pin/?username=makaDv&repo=TempCleaner&theme=dark)](https://github.com/makaDv/TempCleaner)
 
 ---
-[![](https://visitcount.itsvg.in/api?id=makaDv&icon=9&color=0)](https://visitcount.itsvg.in)
+![Profile views](https://komarev.com/ghpvc/?username=makaDv&color=blueviolet&style=for-the-badge&label=PROFILE+VIEWS)
