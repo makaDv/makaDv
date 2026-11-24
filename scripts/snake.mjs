@@ -25,23 +25,24 @@ const PAD = 16;
 const TOP = 34; // room for the score bar
 const W = COLS * CELL + PAD * 2;
 const H = ROWS * CELL + TOP + PAD;
-const SPEED = 150; // px per second while moving
+const SPEED = 230; // px per second while moving
 const GAME_OVER = 3; // seconds the game-over screen stays up
 const START_LEN = 3 * CELL; // initial body length
-const GROW = CELL * 0.6; // growth per item eaten
-const MIN_TARGETS = 40; // fewer contributions than this: add bonus apples
+const GROW = CELL * 0.5; // growth per square eaten
+const MAX_LEN = 12 * CELL; // the body stops growing here
+const FILL = 0.3; // share of the grid covered with squares (real contributions first, then bonus)
 
 const LEVELS = { NONE: 0, FIRST_QUARTILE: 1, SECOND_QUARTILE: 2, THIRD_QUARTILE: 3, FOURTH_QUARTILE: 4 };
 
 const THEMES = {
   light: {
     bg: "#ffffff", text: "#24292f", dim: "#57606a", cells: ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"],
-    snake: "#8b5cf6", snakeEdge: "#6d28d9", eye: "#ffffff", pupil: "#1f2328", apple: "#ef4444", leaf: "#16a34a",
+    snake: "#8b5cf6", snakeEdge: "#6d28d9", eye: "#ffffff", pupil: "#1f2328",
     overlay: "#ffffff",
   },
   dark: {
     bg: "#0d1117", text: "#e6edf3", dim: "#8b949e", cells: ["#161b22", "#0e4429", "#006d32", "#26a641", "#39d353"],
-    snake: "#a78bfa", snakeEdge: "#7c3aed", eye: "#ffffff", pupil: "#0d1117", apple: "#f85149", leaf: "#3fb950",
+    snake: "#a78bfa", snakeEdge: "#7c3aed", eye: "#ffffff", pupil: "#0d1117",
     overlay: "#0d1117",
   },
 };
@@ -64,51 +65,96 @@ async function fetchCalendar(user) {
   return grid;
 }
 
-// Deterministic PRNG (seeded by date) so apples move every day but builds are reproducible.
+// Deterministic PRNG seeded by the date: the board and route change every day, builds are reproducible.
 function rng(seed) {
   let s = seed >>> 0;
   return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
 }
 
 // ---------- game simulation ----------
-function plan(grid) {
-  const targets = grid.filter((c) => c.level > 0).map((c) => ({ ...c, kind: "cell", points: c.level * 10 }));
-  if (targets.length < MIN_TARGETS) {
-    const today = new Date().toISOString().slice(0, 10);
-    const rand = rng(Number(today.replace(/-/g, "")));
-    const free = grid.filter((c) => c.level === 0);
-    for (let i = free.length - 1; i > 0; i--) {
-      const j = Math.floor(rand() * (i + 1));
-      [free[i], free[j]] = [free[j], free[i]];
-    }
-    free.slice(0, MIN_TARGETS - targets.length).forEach((c) => targets.push({ ...c, kind: "apple", points: 5 }));
+// Bonus squares: when the real calendar has few contributions, extra squares in the
+// GitHub palette (levels 1-4) are scattered on empty days so the snake has a full meal.
+function fillGrid(grid, rand) {
+  const real = grid.filter((c) => c.level > 0).length;
+  const want = Math.round(grid.length * FILL);
+  if (real >= want) return grid;
+  const free = grid.filter((c) => c.level === 0);
+  for (let i = free.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [free[i], free[j]] = [free[j], free[i]];
   }
+  for (const c of free.slice(0, want - real)) {
+    const r = rand();
+    c.level = r < 0.4 ? 1 : r < 0.7 ? 2 : r < 0.9 ? 3 : 4; // light shades are the most common, like on GitHub
+  }
+  return grid;
+}
 
-  // Left-to-right sweep: column by column, each column walked in the direction
-  // that starts nearest to the head. The head never moves left, so the body never crosses itself.
-  const pts = []; // path corners in grid units
-  let cur = { x: -1, y: 3 };
-  const startX = -1 - (START_LEN + CELL * 2) / CELL;
-  pts.push({ x: startX, y: 3 }, { ...cur });
-  let dist = (cur.x - startX) * CELL;
+// Real snake simulation on the grid: at each step the head goes to one of the closest
+// remaining squares (picked at random), along a shortest path that avoids its own body.
+// Neighbour order is shuffled, so every day the route looks different.
+function plan(grid, rand) {
+  const targets = new Map(grid.filter((c) => c.level > 0).map((c) => [c.x + "," + c.y, c]));
+  const inside = (x, y) => x >= -1 && x <= COLS && y >= 0 && y < ROWS; // grid plus a 1-cell border left and right
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const startX = -1 - Math.ceil((START_LEN + CELL * 2) / CELL);
+  const trail = []; // every cell the head visits, in order
+  for (let x = startX; x <= -1; x++) trail.push({ x, y: 3 });
   const order = [];
-  const cols = [...new Set(targets.map((t) => t.x))].sort((a, b) => a - b);
-  for (const x of cols) {
-    const col = targets.filter((t) => t.x === x).sort((a, b) => a.y - b.y);
-    const top = col[0].y, bottom = col[col.length - 1].y;
-    if (Math.abs(cur.y - bottom) < Math.abs(cur.y - top)) col.reverse();
-    for (const t of col) {
-      if (t.x !== cur.x) { pts.push({ x: t.x, y: cur.y }); dist += Math.abs(t.x - cur.x) * CELL; }
-      if (t.y !== cur.y) { pts.push({ x: t.x, y: t.y }); dist += Math.abs(t.y - cur.y) * CELL; }
-      cur = { x: t.x, y: t.y };
-      order.push({ ...t, at: dist });
+  let eaten = 0;
+  const bodyCells = () => {
+    const n = Math.ceil(Math.min(START_LEN + eaten * GROW, MAX_LEN) / CELL) + 1;
+    return new Set(trail.slice(-n, -1).map((p) => p.x + "," + p.y));
+  };
+  const bfs = (from, avoid) => {
+    const prev = new Map([[from.x + "," + from.y, null]]);
+    let frontier = [from];
+    const found = [];
+    while (frontier.length && !found.length) {
+      const next = [];
+      for (const p of frontier) {
+        const dirs = [...DIRS].sort(() => rand() - 0.5);
+        for (const [dx, dy] of dirs) {
+          const q = { x: p.x + dx, y: p.y + dy }, key = q.x + "," + q.y;
+          if (!inside(q.x, q.y) || prev.has(key) || avoid.has(key)) continue;
+          prev.set(key, p);
+          next.push(q);
+          if (targets.has(key)) found.push(q);
+        }
+      }
+      frontier = next;
     }
+    if (!found.length) return null;
+    let q = found[Math.floor(rand() * found.length)];
+    const path = [];
+    while (q && !(q.x === from.x && q.y === from.y)) { path.unshift(q); q = prev.get(q.x + "," + q.y); }
+    return path;
+  };
+  while (targets.size) {
+    const head = trail[trail.length - 1];
+    const path = bfs(head, bodyCells()) || bfs(head, new Set());
+    for (const p of path) trail.push(p);
+    const end = path[path.length - 1], key = end.x + "," + end.y;
+    order.push({ ...targets.get(key), points: targets.get(key).level * 10, at: (trail.length - 1) * CELL });
+    targets.delete(key);
+    eaten++;
   }
-  const finalLen = START_LEN + order.length * GROW;
-  const exitX = COLS + 1 + Math.ceil((finalLen + CELL * 2) / CELL);
-  pts.push({ x: exitX, y: cur.y });
-  dist += (exitX - cur.x) * CELL;
-  return { pts, order, total: dist };
+  // leave the board through the nearest side, along the current row
+  const last = trail[trail.length - 1];
+  const tailCells = Math.ceil((Math.min(START_LEN + eaten * GROW, MAX_LEN) + CELL * 2) / CELL);
+  const dir = last.x < COLS / 2 ? -1 : 1;
+  const exitX = dir > 0 ? COLS + 1 + tailCells : -2 - tailCells;
+  for (let x = last.x + dir; x !== exitX + dir; x += dir) trail.push({ x, y: last.y });
+
+  // compress unit steps into corner points
+  const pts = [trail[0]];
+  for (let i = 1; i < trail.length - 1; i++) {
+    const a = trail[i - 1], b = trail[i], c = trail[i + 1];
+    if (b.x - a.x !== c.x - b.x || b.y - a.y !== c.y - b.y) pts.push(b);
+  }
+  pts.push(trail[trail.length - 1]);
+  const steps = trail.length - 1;
+  return { pts, order, total: steps * CELL };
 }
 
 // ---------- render ----------
@@ -138,7 +184,7 @@ function render(grid, game, th) {
   let len = START_LEN;
   for (const t of order) {
     times.push(t.at / SPEED); S.push(t.at); L.push(len);
-    len += GROW;
+    len = Math.min(len + GROW, MAX_LEN);
     times.push(t.at / SPEED + 0.0001); S.push(t.at); L.push(len);
   }
   times.push(moveT); S.push(total); L.push(len);
@@ -177,17 +223,8 @@ function render(grid, game, th) {
     const t = eatenAt.get(c.x + "," + c.y);
     const fill = th.cells[c.level];
     const r = '<rect x="' + (PAD + c.x * CELL + 2) + '" y="' + (TOP + c.y * CELL + 2) + '" width="' + SIZE + '" height="' + SIZE + '" rx="2.5" fill="' + fill + '"';
-    if (t && t.kind === "cell") out.push(r + ">" + anim("fill", [fill, th.cells[0], th.cells[0]], [0, k(t.at / SPEED), 1], discrete) + "</rect>");
+    if (t) out.push(r + ">" + anim("fill", [fill, th.cells[0], th.cells[0]], [0, k(t.at / SPEED), 1], discrete) + "</rect>");
     else out.push(r + "/>");
-  }
-
-  // apples
-  for (const t of order.filter((o) => o.kind === "apple")) {
-    const cx = px(t.x), cy = py(t.y), te = k(t.at / SPEED);
-    out.push('<g transform="translate(' + cx + " " + cy + ')"><g>' +
-      '<circle r="4.6" cy="0.8" fill="' + th.apple + '"/><path d="M0 -3.5 q2.5 -3 4 -2.5 q-1 2.5 -4 2.5z" fill="' + th.leaf + '"/>' +
-      '<animateTransform attributeName="transform" type="scale" dur="' + dur + '" repeatCount="indefinite" values="1;1;0;0" keyTimes="0;' +
-      te + ";" + k(t.at / SPEED + 0.15) + ';1"/></g></g>');
   }
 
   // body + head
@@ -205,7 +242,7 @@ function render(grid, game, th) {
     const cx = px(t.x), cy = py(t.y), t0 = t.at / SPEED;
     // a0 = just before the bite, so nothing fades in early under linear interpolation
     const a0 = f(Math.max(0, k(t0) - 0.0001)), a = k(t0), b = k(t0 + 0.35), c = k(t0 + 0.8);
-    const col = t.kind === "apple" ? th.apple : th.cells[4];
+    const col = th.cells[Math.max(t.level, 2)];
     out.push('<circle cx="' + cx + '" cy="' + cy + '" r="0" fill="none" stroke="' + col + '" stroke-width="2" opacity="0">' +
       anim("r", [0, 0, 2, 12, 12], [0, a0, a, b, 1]) + anim("opacity", [0, 0, 0.9, 0, 0], [0, a0, a, b, 1]) + "</circle>");
     out.push('<text x="' + cx + '" y="' + (cy - 6) + '" font-size="10" text-anchor="middle" fill="' + col + '" opacity="0">+' + t.points +
@@ -223,8 +260,9 @@ function render(grid, game, th) {
   return out.join("\n");
 }
 
-const grid = await fetchCalendar(USER);
-const game = plan(grid);
+const rand = rng(Number(new Date().toISOString().slice(0, 10).replace(/-/g, "")));
+const grid = fillGrid(await fetchCalendar(USER), rand);
+const game = plan(grid, rand);
 mkdirSync(OUT, { recursive: true });
 writeFileSync(join(OUT, "snake.svg"), render(grid, game, THEMES.light));
 writeFileSync(join(OUT, "snake-dark.svg"), render(grid, game, THEMES.dark));
